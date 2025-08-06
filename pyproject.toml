@@ -9,6 +9,8 @@ dependencies = [
     "langchain",
     "langchain-community",
     "langchain-chroma",
+    "langchain-ollama",
+    "unstructured",
     "ollama",
     "pypdf",
 ]
