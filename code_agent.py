@@ -5,8 +5,10 @@ from typing import TypedDict, List
 from langgraph.graph import StateGraph, END
 from agent_tools import CodeAgentTools
 
+
 class AgentState(TypedDict):
     """Defines the state of our agent. This is passed between nodes."""
+
     collection_name: str
     file_path: str
     task_description: str
@@ -15,6 +17,7 @@ class AgentState(TypedDict):
     modified_functions: dict  # Mapping of function_name -> modified_code
     final_code: str
     error: str
+
 
 class CodeImprovementAgent:
     def __init__(self, tools: CodeAgentTools):
@@ -37,16 +40,16 @@ class CodeImprovementAgent:
         graph.add_conditional_edges(
             "find_functions",
             self.decide_to_improve_or_finish,
-            {"continue": "improve_function", "finish": END, "error": "handle_error"}
+            {"continue": "improve_function", "finish": END, "error": "handle_error"},
         )
         graph.add_conditional_edges(
             "improve_function",
             self.decide_to_continue_improving,
-            {"continue": "improve_function", "finish": "assemble_code"}
+            {"continue": "improve_function", "finish": "assemble_code"},
         )
         graph.add_edge("assemble_code", END)
         graph.add_edge("handle_error", END)
-        
+
         return graph.compile()
 
     # --- Node Implementations ---
@@ -61,26 +64,34 @@ class CodeImprovementAgent:
 
     def find_functions_node(self, state: AgentState):
         print("Node: Finding functions to improve...")
-        if state.get("error"): return state
-        
-        function_names_str = self.tools.list_functions_to_improve(state["full_file_content"])
+        if state.get("error"):
+            return state
+
+        function_names_str = self.tools.list_functions_to_improve(
+            state["full_file_content"]
+        )
         if not function_names_str.strip():
             print("No functions to improve.")
             state["functions_to_improve"] = []
         else:
-            state["functions_to_improve"] = [name.strip() for name in function_names_str.split(',')]
+            state["functions_to_improve"] = [
+                name.strip() for name in function_names_str.split(",")
+            ]
         state["modified_functions"] = {}
         return state
 
     def improve_function_node(self, state: AgentState):
         print("Node: Improving a function...")
-        if state.get("error"): return state
+        if state.get("error"):
+            return state
 
         # Process one function at a time from the list
         func_name = state["functions_to_improve"].pop(0)
-        
+
         # Simple regex to extract a function's code block
-        func_regex = re.compile(rf"def {func_name}\(.*\):(?:\n(?!\s*def\s).|.)*", re.DOTALL)
+        func_regex = re.compile(
+            rf"def {func_name}\(.*\):(?:\n(?!\s*def\s).|.)*", re.DOTALL
+        )
         match = func_regex.search(state["full_file_content"])
 
         if not match:
@@ -89,13 +100,17 @@ class CodeImprovementAgent:
 
         original_func_code = match.group(0)
         modified_func_code = self.tools.add_docstring_to_function(original_func_code)
-        state["modified_functions"][func_name] = (original_func_code, modified_func_code)
-        
+        state["modified_functions"][func_name] = (
+            original_func_code,
+            modified_func_code,
+        )
+
         return state
 
     def assemble_code_node(self, state: AgentState):
         print("Node: Assembling final code...")
-        if state.get("error"): return state
+        if state.get("error"):
+            return state
 
         final_code = state["full_file_content"]
         for func_name, (original, modified) in state["modified_functions"].items():
@@ -110,13 +125,17 @@ class CodeImprovementAgent:
     # --- Conditional Edge Logic ---
 
     def decide_to_improve_or_finish(self, state: AgentState):
-        if state.get("error"): return "error"
-        if not state.get("functions_to_improve"): return "finish"
+        if state.get("error"):
+            return "error"
+        if not state.get("functions_to_improve"):
+            return "finish"
         return "continue"
-    
+
     def decide_to_continue_improving(self, state: AgentState):
-        if state.get("error"): return "error"
-        if not state.get("functions_to_improve"): return "finish"
+        if state.get("error"):
+            return "error"
+        if not state.get("functions_to_improve"):
+            return "finish"
         return "continue"
 
     # --- Agent's Public run Method ---
@@ -130,7 +149,7 @@ class CodeImprovementAgent:
             functions_to_improve=[],
             modified_functions={},
             final_code="",
-            error=None
+            error=None,
         )
         final_state = self.graph.invoke(initial_state)
         return final_state

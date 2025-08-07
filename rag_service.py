@@ -10,7 +10,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnablePassthrough
-from langchain_community.document_loaders import UnstructuredFileLoader  # New loader
+from langchain_unstructured import UnstructuredLoader
 
 # Import settings from our config file
 import config
@@ -88,7 +88,6 @@ class RAGService:
         Loads documents, respecting .gitignore, creates summaries, and builds a vector store.
         """
 
-        # --- New: .gitignore handling ---
         gitignore_path = os.path.join(code_path, ".gitignore")
         files_to_load = []
 
@@ -97,8 +96,14 @@ class RAGService:
             with open(gitignore_path, "r") as f:
                 spec = pathspec.PathSpec.from_lines("gitwildmatch", f)
 
-            for root, dirs, files in os.walk(code_path):
-                # Prune directories that are ignored to speed up the walk
+            for root, dirs, files in os.walk(code_path, topdown=True):
+                # --- THIS IS THE KEY CHANGE ---
+                # Explicitly remove the .git directory from the walk
+                if ".git" in dirs:
+                    dirs.remove(".git")
+                # --- END OF KEY CHANGE ---
+
+                # Prune other directories that are ignored to speed up the walk
                 dirs[:] = [
                     d
                     for d in dirs
@@ -113,35 +118,31 @@ class RAGService:
                     if not spec.match_file(relative_path):
                         files_to_load.append(full_path)
         else:
-            # Fallback to the original DirectoryLoader if no .gitignore is found
             print("No .gitignore found. Loading all files based on glob pattern.")
             fallback_loader = DirectoryLoader(
                 code_path, glob=config.TARGET_FILE_GLOB, recursive=True
             )
-            # We just need the paths from the loader, not the content yet
             files_to_load = [doc.metadata["source"] for doc in fallback_loader.load()]
 
         print(f"Found {len(files_to_load)} files to load after filtering.")
         if not files_to_load:
             raise ValueError("No files found to index after applying filters.")
 
-        # --- Use UnstructuredFileLoader to load the filtered list of files ---
         print("Loading documents from the filtered file list...")
         docs = []
         for file_path in files_to_load:
             try:
-                # Use UnstructuredFileLoader for its ability to handle various file types
-                loader = UnstructuredFileLoader(file_path)
+                loader = UnstructuredLoader(file_path)
                 docs.extend(loader.load())
             except Exception as e:
                 print(f"Warning: Could not load file {file_path}. Error: {e}")
 
+        # The rest of the function remains the same...
         if not docs:
             raise ValueError("Document loading resulted in zero documents.")
 
-        # --- The rest of the function (summarization, chunking, indexing) remains the same ---
-
         print(f"Generating summaries for {len(docs)} documents...")
+        # ... (the summarization and indexing logic is unchanged)
         summaries = []
         summary_template = """You are an expert programmer. Provide a concise, high-level summary of the following code file.
         Focus on its primary purpose, main functions or classes, and its role in the overall application.
