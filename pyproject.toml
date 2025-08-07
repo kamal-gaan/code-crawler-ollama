@@ -16,7 +16,10 @@ dependencies = [
     "langgraph",
     "ollama",
     "pathspec",
+    # This line installs the Windows-specific package with bundled binaries
     "python-magic-bin; sys_platform == 'win32'",
+    # This line installs the standard package for other systems (Linux, macOS)
+    "python-magic; sys_platform != 'win32'",
     # For full document parsing capabilities
     "unstructured[pdf,md]",
 ]
