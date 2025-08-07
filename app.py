@@ -43,7 +43,7 @@ def index():
 def index_collection():
     """
     API endpoint to index a new codebase (a 'collection').
-    This is the correct route that the frontend uses.
+    Now with a check to prevent re-indexing an existing collection.
     """
     data = request.get_json()
     collection_name = data.get("collection_name")
@@ -52,11 +52,26 @@ def index_collection():
     if not all([collection_name, code_path]):
         return jsonify({"error": "Both 'collection_name' and 'path' are required"}), 400
 
+    # --- NEW: Check if the collection directory already exists ---
+    collection_persist_path = os.path.join(
+        app.config["PERSIST_DIRECTORY"], collection_name
+    )
+    if os.path.exists(collection_persist_path):
+        return (
+            jsonify(
+                {
+                    "status": "skipped",
+                    "message": f"Collection '{collection_name}' already exists. No need to re-index.",
+                }
+            ),
+            200,
+        )  # Return 200 OK instead of creating a new resource
+    # --- END OF NEW CHECK ---
+
     if not os.path.isdir(code_path):
         return jsonify({"error": f"Invalid path specified: {code_path}"}), 400
 
     try:
-        # Calls our RAGService to handle persistent, per-collection logic
         service = RAGService(collection_name=collection_name)
         num_docs = service.index_codebase(code_path)
         return (

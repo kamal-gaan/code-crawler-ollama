@@ -4,7 +4,7 @@ import os
 
 # --- Model Configuration ---
 # The Ollama model to use for embeddings and generation
-OLLAMA_MODEL = "deepseek-coder-v2:16b"
+OLLAMA_MODEL = "codellama"
 OLLAMA_BASE_URL = "http://localhost:11434"  # Or your Ollama server URL
 
 # --- Vector Store Configuration ---

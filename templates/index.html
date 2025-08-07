@@ -243,16 +243,28 @@
         if (!currentCollectionName) {
           return alert("Please index a codebase first.");
         }
-        const relativeFilePath = filePathInput.value.trim();
-        if (!relativeFilePath) {
+
+        const filePathFromInput = filePathInput.value.trim();
+        if (!filePathFromInput) {
           return alert("Please provide a file path to improve.");
         }
-        const fullFilePath =
-          `${pathInput.value.trim()}/${relativeFilePath}`.replace(/\\/g, "/");
 
-        improveResultDiv.innerHTML = "";
-        improveLoader.style.display = "block";
-        improveBtn.disabled = true;
+        // --- THIS IS THE CRUCIAL FIX ---
+        // This new logic correctly determines the full path without duplication.
+        let fullFilePath;
+        const isLikelyAbsolutePath =
+          filePathFromInput.includes("/") ||
+          filePathFromInput.includes("\\") ||
+          filePathFromInput.startsWith("C:");
+
+        if (isLikelyAbsolutePath) {
+          // If the user entered what looks like a full path, use it directly.
+          fullFilePath = filePathFromInput.replace(/\\/g, "/");
+        } else {
+          // If they entered a relative path, combine it with the base path from Section 1.
+          const basePath = pathInput.value.trim();
+          fullFilePath = `${basePath}/${filePathFromInput}`.replace(/\\/g, "/");
+        }
 
         try {
           const improveUrl = `/api/collections/${currentCollectionName}/improve`;

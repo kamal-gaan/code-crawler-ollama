@@ -18,10 +18,19 @@ class CodeAgentTools:
         Retrieves the full content of a specific file from the vector store.
         """
         print(f"Tool: Retrieving content for file '{file_path}'")
-        # Use metadata filtering to get all chunks for a specific file
+
+        # This is the line we are fixing.
+        # The original filter was: filter={"source": file_path, "type": "code"}
+
+        # --- NEW, CORRECTED FILTER ---
+        correct_filter = {
+            "$and": [{"source": {"$eq": file_path}}, {"type": {"$eq": "code"}}]
+        }
+        # --- END OF FIX ---
+
         results = self.vectorstore.similarity_search(
             " ",  # Dummy query, the filter is what matters
-            filter={"source": file_path, "type": "code"},
+            filter=correct_filter,
             k=100,  # Retrieve a large number of chunks to get the whole file
         )
         if not results:
