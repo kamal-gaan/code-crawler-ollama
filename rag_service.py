@@ -12,6 +12,9 @@ from langchain_core.documents import Document
 from langchain_core.runnables import RunnablePassthrough
 from langchain_unstructured import UnstructuredLoader
 
+# At the top of rag_service.py
+from langchain_community.vectorstores.utils import filter_complex_metadata
+
 # Import settings from our config file
 import config
 
@@ -84,26 +87,16 @@ class RAGService:
     # In rag_service.py, inside the RAGService class
 
     def index_codebase(self, code_path: str):
-        """
-        Loads documents, respecting .gitignore, creates summaries, and builds a vector store.
-        """
-
+        # ... (The file finding logic is unchanged)
         gitignore_path = os.path.join(code_path, ".gitignore")
         files_to_load = []
-
         if os.path.exists(gitignore_path):
             print("Found .gitignore, applying ignore rules...")
             with open(gitignore_path, "r") as f:
                 spec = pathspec.PathSpec.from_lines("gitwildmatch", f)
-
             for root, dirs, files in os.walk(code_path, topdown=True):
-                # --- THIS IS THE KEY CHANGE ---
-                # Explicitly remove the .git directory from the walk
                 if ".git" in dirs:
                     dirs.remove(".git")
-                # --- END OF KEY CHANGE ---
-
-                # Prune other directories that are ignored to speed up the walk
                 dirs[:] = [
                     d
                     for d in dirs
@@ -111,7 +104,6 @@ class RAGService:
                         os.path.relpath(os.path.join(root, d), code_path)
                     )
                 ]
-
                 for file in files:
                     full_path = os.path.join(root, file)
                     relative_path = os.path.relpath(full_path, code_path)
@@ -137,30 +129,27 @@ class RAGService:
             except Exception as e:
                 print(f"Warning: Could not load file {file_path}. Error: {e}")
 
-        # The rest of the function remains the same...
         if not docs:
             raise ValueError("Document loading resulted in zero documents.")
 
-        print(f"Generating summaries for {len(docs)} documents...")
-        # ... (the summarization and indexing logic is unchanged)
+        # ... (The summarization logic is unchanged)
         summaries = []
-        summary_template = """You are an expert programmer. Provide a concise, high-level summary of the following code file.
-        Focus on its primary purpose, main functions or classes, and its role in the overall application.
-
-        CODE:
-        {file_content}
-
-        SUMMARY:"""
-        summary_prompt = ChatPromptTemplate.from_template(summary_template)
-        summarizer_chain = summary_prompt | self.llm | StrOutputParser()
-
-        for doc in docs:
-            summary = summarizer_chain.invoke({"file_content": doc.page_content})
-            summary_doc = Document(
-                page_content=summary,
-                metadata={"source": doc.metadata["source"], "type": "summary"},
+        if config.SUMMARIZE_DOCUMENTS:
+            print(
+                f"Summarization is ENABLED. Generating summaries for {len(docs)} documents... (This will be slow)"
             )
-            summaries.append(summary_doc)
+            summary_template = "..."  # Your summary template
+            summary_prompt = ChatPromptTemplate.from_template(summary_template)
+            summarizer_chain = summary_prompt | self.llm | StrOutputParser()
+            for doc in docs:
+                summary = summarizer_chain.invoke({"file_content": doc.page_content})
+                summary_doc = Document(
+                    page_content=summary,
+                    metadata={"source": doc.metadata["source"], "type": "summary"},
+                )
+                summaries.append(summary_doc)
+        else:
+            print("Summarization is DISABLED for faster indexing.")
 
         for doc in docs:
             doc.metadata["type"] = "code"
@@ -171,13 +160,19 @@ class RAGService:
         )
         splits = text_splitter.split_documents(docs)
 
-        print("Creating and persisting vector store with summaries and chunks...")
+        print("Creating and persisting vector store...")
         os.makedirs(self.persist_path, exist_ok=True)
 
         docs_to_index = splits + summaries
 
+        # --- THIS IS THE FIX ---
+        # ChromaDB requires simple metadata. This utility removes complex values like lists.
+        print("Filtering complex metadata from documents...")
+        filtered_docs = filter_complex_metadata(docs_to_index)
+        # --- END OF FIX ---
+
         self.vectorstore = Chroma.from_documents(
-            documents=docs_to_index,
+            documents=filtered_docs,  # <-- Use the new filtered list here
             embedding=self.embeddings,
             persist_directory=self.persist_path,
         )
