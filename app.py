@@ -1,28 +1,34 @@
+# app.py
+
 import os
 from flask import Flask, request, jsonify, render_template
-from langchain_ollama import OllamaLLM, OllamaEmbeddings
-from langchain_community.vectorstores import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import DirectoryLoader
-from langchain.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 
-# --- Basic Flask App Setup ---
+# --- Our Custom Modules ---
+from rag_service import RAGService
+from agent_tools import CodeAgentTools
+from code_agent import CodeImprovementAgent
+
+# --- LangChain Core Imports ---
+from langchain_ollama import OllamaLLM, OllamaEmbeddings
+
+# --- Flask App Setup ---
 app = Flask(__name__)
 
-# --- Global Variables ---
-# Using a simple in-memory store for the vector DB. For production, you'd persist this.
-vectorstore = None
-# Define the model to use. Make sure you have pulled this model with Ollama.
-MODEL_NAME = "codellama"
+# Load configuration from config.py
+# Make sure you have a config.py file in the same directory
+try:
+    import config
 
-
-# --- Helper Functions ---
-def format_docs(docs):
-    """Helper function to format documents for the prompt."""
-    return "\n\n".join(doc.page_content for doc in docs)
-
+    app.config.from_object(config)
+except ImportError:
+    print("Warning: config.py not found. Using default settings.")
+    # Define default fallbacks here if needed
+    app.config.setdefault("OLLAMA_MODEL", "codellama")
+    app.config.setdefault("OLLAMA_BASE_URL", "http://localhost:11434")
+    app.config.setdefault("PERSIST_DIRECTORY", "persistent_storage")
+    app.config.setdefault("HOST", "0.0.0.0")
+    app.config.setdefault("PORT", 5000)
+    app.config.setdefault("DEBUG_MODE", True)
 
 # --- Flask Routes ---
 
@@ -33,116 +39,65 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/index_code", methods=["POST"])
-def index_code():
+@app.route("/api/collections", methods=["POST"])
+def index_collection():
     """
-    API endpoint to index a directory of code.
-    Expects a JSON payload with a 'path' key.
+    API endpoint to index a new codebase (a 'collection').
+    This is the correct route that the frontend uses.
     """
-    global vectorstore
-
     data = request.get_json()
-    if not data or "path" not in data:
-        return jsonify({"error": "Path is required"}), 400
+    collection_name = data.get("collection_name")
+    code_path = data.get("path")
 
-    code_path = data["path"]
+    if not all([collection_name, code_path]):
+        return jsonify({"error": "Both 'collection_name' and 'path' are required"}), 400
+
     if not os.path.isdir(code_path):
-        return jsonify({"error": "Invalid path specified"}), 400
+        return jsonify({"error": f"Invalid path specified: {code_path}"}), 400
 
     try:
-        # 1. Load Documents
-        # Using a generic loader for python files. You can add more glob patterns.
-        print(f"Loading documents from {code_path}...")
-        loader = DirectoryLoader(code_path, glob="**/*.py", recursive=True)
-        docs = loader.load()
-
-        if not docs:
-            return jsonify({"error": "No Python files found to index."}), 400
-
-        # 2. Split Documents into Chunks
-        print("Splitting documents...")
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000, chunk_overlap=200
-        )
-        splits = text_splitter.split_documents(docs)
-
-        # 3. Create Embeddings and Vector Store
-        print("Creating embeddings and vector store...")
-        # Note: The first time you run this, it will download the embedding model.
-        embeddings = OllamaEmbeddings(model=MODEL_NAME)
-
-        # Create a new Chroma vector store from the documents
-        vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
-
-        print("Indexing complete!")
-        return jsonify(
-            {"status": "success", "message": f"Successfully indexed {len(docs)} files."}
+        # Calls our RAGService to handle persistent, per-collection logic
+        service = RAGService(collection_name=collection_name)
+        num_docs = service.index_codebase(code_path)
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": f"Successfully indexed {num_docs} files into collection '{collection_name}'.",
+                }
+            ),
+            201,
         )
 
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"An error occurred during indexing: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/ask", methods=["POST"])
-def ask_question():
+@app.route("/api/collections/<collection_name>/ask", methods=["POST"])
+def ask_question(collection_name: str):
     """
-    API endpoint to ask a question about the indexed code.
-    Expects a JSON payload with a 'question' key.
+    API endpoint to ask a question about a specific indexed collection.
     """
-    global vectorstore
-
-    if vectorstore is None:
-        return (
-            jsonify({"error": "Code not indexed yet. Please index a directory first."}),
-            400,
-        )
-
     data = request.get_json()
-    if not data or "question" not in data:
-        return jsonify({"error": "Question is required"}), 400
+    question = data.get("question")
 
-    question = data["question"]
+    if not question:
+        return jsonify({"error": "A question is required"}), 400
 
     try:
-        # 1. Retriever
-        # This object retrieves the most relevant documents from the vector store.
-        retriever = vectorstore.as_retriever(
-            search_type="similarity", search_kwargs={"k": 5}
-        )
+        service = RAGService(collection_name=collection_name)
+        if not service.vectorstore:
+            return (
+                jsonify(
+                    {
+                        "error": f"Collection '{collection_name}' not found or not indexed yet."
+                    }
+                ),
+                404,
+            )
 
-        # 2. Prompt Template
-        # This template structures the input for the LLM.
-        template = """
-        You are an expert programmer and assistant. Answer the user's question based ONLY on the following context of code snippets.
-        If you don't know the answer from the context provided, just say that you don't know. Do not make up an answer.
-
-        CONTEXT:
-        {context}
-
-        QUESTION:
-        {question}
-
-        ANSWER:
-        """
-        prompt = ChatPromptTemplate.from_template(template)
-
-        # 3. LLM
-        llm = OllamaLLM(model=MODEL_NAME, temperature=0)
-
-        # 4. RAG Chain
-        # This chain pipes together the retriever, document formatter, prompt, LLM, and output parser.
-        rag_chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
-            | prompt
-            | llm
-            | StrOutputParser()
-        )
-
-        # 5. Invoke Chain and Get Answer
-        print(f"Invoking chain with question: '{question}'")
-        answer = rag_chain.invoke(question)
-
+        answer = service.ask_question(question)
         return jsonify({"answer": answer})
 
     except Exception as e:
@@ -150,5 +105,54 @@ def ask_question():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/collections/<collection_name>/improve", methods=["POST"])
+def improve_code(collection_name: str):
+    """
+    API endpoint to run the code improvement agent on a specific file.
+    """
+    data = request.get_json()
+    file_path = data.get("file_path")
+    task = data.get("task", "add docstrings")
+
+    if not file_path:
+        return jsonify({"error": "file_path is required"}), 400
+
+    print(f"Starting agent for collection '{collection_name}' on file '{file_path}'")
+    try:
+        llm = OllamaLLM(
+            model=app.config["OLLAMA_MODEL"], base_url=app.config["OLLAMA_BASE_URL"]
+        )
+        embeddings = OllamaEmbeddings(
+            model=app.config["OLLAMA_MODEL"], base_url=app.config["OLLAMA_BASE_URL"]
+        )
+
+        tools = CodeAgentTools(
+            llm, embeddings, collection_name, app.config["PERSIST_DIRECTORY"]
+        )
+        agent = CodeImprovementAgent(tools)
+
+        result_state = agent.run(collection_name, file_path, task)
+
+        if result_state.get("error"):
+            return jsonify({"error": result_state["error"]}), 500
+
+        return jsonify(
+            {
+                "message": "Agent run complete.",
+                "modified_code": result_state.get(
+                    "final_code", "No changes were made."
+                ),
+            }
+        )
+
+    except Exception as e:
+        print(f"An error occurred during agent run: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Create the main persistence directory if it doesn't exist
+    os.makedirs(app.config["PERSIST_DIRECTORY"], exist_ok=True)
+    app.run(
+        host=app.config["HOST"], port=app.config["PORT"], debug=app.config["DEBUG_MODE"]
+    )
