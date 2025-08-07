@@ -1,3 +1,5 @@
+# In pyproject.toml
+
 [project]
 name = "code-crawler"
 version = "0.1.0"
@@ -10,7 +12,11 @@ dependencies = [
     "langchain-community",
     "langchain-chroma",
     "langchain-ollama",
-    "unstructured",
+    "langchain-unstructured",
+    "langgraph",
     "ollama",
-    "pypdf",
+    "pathspec",
+    "python-magic-bin; sys_platform == 'win32'",
+    # For full document parsing capabilities
+    "unstructured[pdf,md]",
 ]
