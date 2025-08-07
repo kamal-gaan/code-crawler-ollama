@@ -8,4 +8,4 @@ wheels/
 
 # Virtual environments
 .venv
-persistent_storage/
+persistent_storage/*
