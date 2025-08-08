@@ -128,6 +128,7 @@ def improve_code(collection_name: str):
     data = request.get_json()
     file_path = data.get("file_path")
     task = data.get("task", "add docstrings")
+    write_changes = data.get("write_changes", False)
 
     if not file_path:
         return jsonify({"error": "file_path is required"}), 400
@@ -145,8 +146,9 @@ def improve_code(collection_name: str):
             llm, embeddings, collection_name, app.config["PERSIST_DIRECTORY"]
         )
         agent = CodeImprovementAgent(tools)
-
-        result_state = agent.run(collection_name, file_path, task)
+        result_state = agent.run(
+            collection_name, file_path, task, write_changes=write_changes
+        )
 
         if result_state.get("error"):
             return jsonify({"error": result_state["error"]}), 500
@@ -157,9 +159,11 @@ def improve_code(collection_name: str):
                 "modified_code": result_state.get(
                     "final_code", "No changes were made."
                 ),
+                "save_status": result_state.get(
+                    "save_status", "Changes were not saved."
+                ),  # Return the save status
             }
         )
-
     except Exception as e:
         print(f"An error occurred during agent run: {e}")
         return jsonify({"error": str(e)}), 500

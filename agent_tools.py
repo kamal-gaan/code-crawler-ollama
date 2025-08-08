@@ -61,51 +61,59 @@ class CodeAgentTools:
         Uses the LLM to identify functions in a file that need docstrings with a very strict prompt.
         """
         print("Tool: Identifying functions that need docstrings.")
-        
-        # --- NEW, STRICTER PROMPT ---
-        template = """You are a highly disciplined code analysis tool. Your sole purpose is to identify Python functions that do not have a docstring.
-        Analyze the following Python code.
-        Respond ONLY with a comma-separated list of the function names.
-        - DO NOT add any explanation.
-        - DO NOT use bullet points.
-        - DO NOT say "Here are the functions".
-        - If all functions are documented, return the exact string "NONE".
 
-        Example 1:
-        CODE:
-        def func_a():
-            '''My docstring.'''
+        # --- FINAL, POLISHED PROMPT ---
+        # This version clarifies the instructions and simplifies the examples to reduce confusion.
+        template = """You are a code analysis tool. Your only job is to find Python functions without docstrings in the provided code.
+        You must follow these rules strictly:
+        1.  Analyze the user's code provided after "---CODE---".
+        2.  Respond ONLY with a comma-separated list of the function names that are missing docstrings.
+        3.  DO NOT include any functions from the examples.
+        4.  DO NOT add any conversational text, explanations, or bullet points.
+        5.  If no functions are missing docstrings, you MUST return the exact word "NONE".
+
+        ---EXAMPLE 1---
+        [CODE]
+        def func_with_docstring():
+            '''I have a docstring.'''
             pass
-        def func_b(x):
+        def func_without_docstring(x):
             return x + 1
-        RESPONSE:
-        func_b
+        [RESPONSE]
+        func_without_docstring
 
-        Example 2:
-        CODE:
-        def func_c():
-            '''My docstring.'''
+        ---EXAMPLE 2---
+        [CODE]
+        def another_documented_func():
+            '''Also documented.'''
             pass
-        RESPONSE:
+        [RESPONSE]
         NONE
 
-        Here is the code to analyze:
-        CODE:
+        ---CODE---
         {code}
 
-        RESPONSE:"""
-        # --- END OF NEW PROMPT ---
+        [RESPONSE]"""
+        # --- END OF FINAL PROMPT ---
 
         prompt = ChatPromptTemplate.from_template(template)
         chain = prompt | self.llm | StrOutputParser()
-        
+
         response = chain.invoke({"code": file_content})
-        
-        # Clean up the response just in case
+
         response = response.strip()
-        if response == "NONE":
+        if "NONE" in response or not response:
             return ""
-        return response
+
+        # Extra safeguard: remove any example function names if the LLM still includes them
+        example_funcs = ["func_without_docstring", "another_documented_func"]
+        found_funcs = [
+            func.strip()
+            for func in response.split(",")
+            if func.strip() and func.strip() not in example_funcs
+        ]
+
+        return ",".join(found_funcs)
 
     def add_docstring_to_function(self, function_code: str) -> str:
         """
@@ -124,3 +132,23 @@ class CodeAgentTools:
         response = chain.invoke({"function": function_code})
         # Clean up potential markdown code fences from the LLM response
         return response.strip().replace("```python", "").replace("```", "").strip()
+
+    def save_modified_code(self, file_path: str, modified_code: str) -> str:
+        """
+        Saves the modified code back to the original file path.
+        """
+        print(f"Tool: Saving improved code to '{file_path}'")
+        try:
+            # It's a good practice to make a backup of the original file
+            backup_path = file_path + ".bak"
+            os.rename(file_path, backup_path)
+            print(f"Tool: Original file backed up at '{backup_path}'")
+
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(modified_code)
+            
+            return f"Successfully saved changes to {os.path.basename(file_path)}."
+        except Exception as e:
+            error_message = f"Error saving file {file_path}: {e}"
+            print(f"Tool: {error_message}")
+            return error_message

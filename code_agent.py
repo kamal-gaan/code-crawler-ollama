@@ -17,6 +17,8 @@ class AgentState(TypedDict):
     modified_functions: dict  # Mapping of function_name -> modified_code
     final_code: str
     error: str
+    write_changes: bool
+    save_status: str
 
 
 class CodeImprovementAgent:
@@ -27,14 +29,16 @@ class CodeImprovementAgent:
     def _build_graph(self):
         graph = StateGraph(AgentState)
 
-        # Define the nodes of the graph
+        # ... (add_node for retrieve_file, find_functions, improve_function, assemble_code, handle_error)
         graph.add_node("retrieve_file", self.retrieve_file_node)
         graph.add_node("find_functions", self.find_functions_node)
         graph.add_node("improve_function", self.improve_function_node)
         graph.add_node("assemble_code", self.assemble_code_node)
         graph.add_node("handle_error", self.handle_error_node)
+        # --- NEW: Add the save_file node ---
+        graph.add_node("save_file", self.save_file_node)
 
-        # Define the edges (the flow of control)
+        # --- Define the edges (the flow of control) ---
         graph.set_entry_point("retrieve_file")
         graph.add_edge("retrieve_file", "find_functions")
         graph.add_conditional_edges(
@@ -47,12 +51,23 @@ class CodeImprovementAgent:
             self.decide_to_continue_improving,
             {"continue": "improve_function", "finish": "assemble_code"},
         )
-        graph.add_edge("assemble_code", END)
+        # --- NEW: Connect assemble_code to a new decision ---
+        graph.add_conditional_edges(
+            "assemble_code",
+            self.decide_to_save_or_finish,
+            {"save": "save_file", "finish": END},
+        )
+        graph.add_edge("save_file", END)  # End the process after saving
         graph.add_edge("handle_error", END)
 
         return graph.compile()
 
     # --- Node Implementations ---
+    def save_file_node(self, state: AgentState):
+        print("Node: Saving file...")
+        status = self.tools.save_modified_code(state["file_path"], state["final_code"])
+        state["save_status"] = status
+        return state
 
     def retrieve_file_node(self, state: AgentState):
         print("Node: Retrieving file content...")
@@ -138,13 +153,27 @@ class CodeImprovementAgent:
             return "finish"
         return "continue"
 
+    def decide_to_save_or_finish(self, state: AgentState):
+        """Decides whether to save the file based on the 'write_changes' flag."""
+        if state.get("write_changes", False):
+            return "save"
+        else:
+            return "finish"
+
     # --- Agent's Public run Method ---
 
-    def run(self, collection_name: str, file_path: str, task_description: str):
+    def run(
+        self,
+        collection_name: str,
+        file_path: str,
+        task_description: str,
+        write_changes: bool = False,
+    ):
         initial_state = AgentState(
             collection_name=collection_name,
             file_path=file_path,
             task_description=task_description,
+            write_changes=write_changes,
             full_file_content="",
             functions_to_improve=[],
             modified_functions={},
