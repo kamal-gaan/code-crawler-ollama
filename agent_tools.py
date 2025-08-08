@@ -1,5 +1,5 @@
 # agent_tools.py
-
+import os
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_community.vectorstores import Chroma
@@ -15,48 +15,97 @@ class CodeAgentTools:
 
     def get_full_file_content(self, file_path: str) -> str:
         """
-        Retrieves the full content of a specific file from the vector store.
+        Retrieves the full content of a specific file from the vector store using a direct metadata query.
+        This version normalizes the file path to match the OS-specific format.
         """
         print(f"Tool: Retrieving content for file '{file_path}'")
 
-        # This is the line we are fixing.
-        # The original filter was: filter={"source": file_path, "type": "code"}
+        try:
+            # --- THIS IS THE DEFINITIVE FIX ---
+            # Normalize the path to match the format likely stored by the loader on your OS (e.g., using '\' on Windows)
+            normalized_path = os.path.normpath(file_path)
+            print(f"Tool: Normalized path to '{normalized_path}' for querying.")
+            # --- END OF FIX ---
 
-        # --- NEW, CORRECTED FILTER ---
-        correct_filter = {
-            "$and": [{"source": {"$eq": file_path}}, {"type": {"$eq": "code"}}]
-        }
-        # --- END OF FIX ---
+            results = self.vectorstore.get(
+                where={
+                    "$and": [
+                        {
+                            "source": {"$eq": normalized_path}
+                        },  # Use the normalized path in the query
+                        {"type": {"$eq": "code"}},
+                    ]
+                },
+                limit=1000,
+            )
 
-        results = self.vectorstore.similarity_search(
-            " ",  # Dummy query, the filter is what matters
-            filter=correct_filter,
-            k=100,  # Retrieve a large number of chunks to get the whole file
-        )
-        if not results:
-            return f"Error: Could not find file {file_path} in the collection."
+            documents = results.get("documents", [])
 
-        # Sort chunks by their original position if possible (depends on loader metadata)
-        # For now, we assume the order is reasonably preserved.
-        return "\n".join([doc.page_content for doc in results])
+            if not documents:
+                # Add extra debug info if it fails again
+                print(
+                    f"DEBUG: File not found. Run debug_db.py to see all available file paths in the 'temp' collection."
+                )
+                return (
+                    f"Error: Could not find file {normalized_path} in the collection."
+                )
+
+            return "\n".join(documents)
+
+        except Exception as e:
+            print(f"An error occurred while querying the vector store: {e}")
+            return f"Error: An exception occurred while trying to retrieve {file_path}."
 
     def list_functions_to_improve(self, file_content: str) -> str:
         """
-        Uses the LLM to identify functions in a file that need docstrings.
+        Uses the LLM to identify functions in a file that need docstrings with a very strict prompt.
         """
         print("Tool: Identifying functions that need docstrings.")
-        template = """You are a code analysis expert. Analyze the following Python code and identify all functions that do not have a PEP 257 compliant docstring.
-        Respond ONLY with a comma-separated list of the function names. If all functions are documented, return an empty string.
+        
+        # --- NEW, STRICTER PROMPT ---
+        template = """You are a highly disciplined code analysis tool. Your sole purpose is to identify Python functions that do not have a docstring.
+        Analyze the following Python code.
+        Respond ONLY with a comma-separated list of the function names.
+        - DO NOT add any explanation.
+        - DO NOT use bullet points.
+        - DO NOT say "Here are the functions".
+        - If all functions are documented, return the exact string "NONE".
 
-        Example Response: my_function_one,my_function_two
+        Example 1:
+        CODE:
+        def func_a():
+            '''My docstring.'''
+            pass
+        def func_b(x):
+            return x + 1
+        RESPONSE:
+        func_b
 
+        Example 2:
+        CODE:
+        def func_c():
+            '''My docstring.'''
+            pass
+        RESPONSE:
+        NONE
+
+        Here is the code to analyze:
         CODE:
         {code}
 
-        FUNCTION NAMES:"""
+        RESPONSE:"""
+        # --- END OF NEW PROMPT ---
+
         prompt = ChatPromptTemplate.from_template(template)
         chain = prompt | self.llm | StrOutputParser()
-        return chain.invoke({"code": file_content})
+        
+        response = chain.invoke({"code": file_content})
+        
+        # Clean up the response just in case
+        response = response.strip()
+        if response == "NONE":
+            return ""
+        return response
 
     def add_docstring_to_function(self, function_code: str) -> str:
         """
